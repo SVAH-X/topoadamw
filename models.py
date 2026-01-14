@@ -5,7 +5,6 @@ class TopoCNN(nn.Module):
     def __init__(self):
         super(TopoCNN, self).__init__()
         
-        # 输入: (Batch, 2, 50, 50) -> H0 和 H1 两个通道
         self.features = nn.Sequential(
             # Layer 1
             nn.Conv2d(2, 16, kernel_size=3, padding=1),
@@ -20,7 +19,6 @@ class TopoCNN(nn.Module):
             # Layer 3
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            # Global Average Pooling: 不管图里特征在哪，只管有没有
             nn.AdaptiveAvgPool2d((1, 1)) 
         )
         
@@ -28,7 +26,7 @@ class TopoCNN(nn.Module):
             nn.Flatten(),
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(32, 3) # 输出 3 类: 0=减速, 1=保持, 2=加速
+            nn.Linear(32, 3)
         )
 
     def forward(self, x):
@@ -39,10 +37,6 @@ class TopoCNN(nn.Module):
     
     
 class CifarNet(nn.Module):
-    """
-    一个用于 CIFAR-10 的轻量级卷积网络 (Target Model)。
-    比 SimpleNet 强，但比 ResNet 弱，方便观察优化器的影响。
-    """
     def __init__(self):
         super(CifarNet, self).__init__()
         self.features = nn.Sequential(
