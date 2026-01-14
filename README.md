@@ -4,9 +4,9 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
-**TopoAdam** is a PyTorch optimizer that automatically adapts learning rates based on the **geometric shape of your loss landscape** using Topological Data Analysis (TDA). It provides better convergence stability and generalization than standard AdamW optimizers.
+**TopoAdamW** is a PyTorch optimizer that automatically adapts learning rates based on the **geometric shape of your loss landscape** using Topological Data Analysis (TDA). It provides better convergence stability and generalization than standard AdamW optimizers.
 
-## Why TopoAdam?
+## Why TopoAdamW?
 
 Training neural networks with a fixed learning rate is like driving with cruise control on a mountain road. TopoAdamW acts as an intelligent co-pilot:
 
