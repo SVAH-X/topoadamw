@@ -1,30 +1,36 @@
-﻿# TopoAdamW: Topology-Guided Adaptive Optimizer 🌄
+# TopoAdamW: Topology-Guided Learning Rate Controller for AdamW 🌄
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
-**TopoAdamW** is a PyTorch optimizer that automatically adapts learning rates based on the **geometric shape of your loss landscape** using Topological Data Analysis (TDA). It provides better convergence stability and generalization than standard AdamW optimizers.
+TopoAdamW is a topology-guided **learning rate controller** built on top of AdamW. 
+It probes the local loss landscape using Topological Data Analysis (TDA) and dynamically scales the global learning rate to improve training stability and efficiency.
+
+TopoAdamW **does not modify gradient directions or optimizer internals**; instead, it acts as an external controller that adapts step size based on the geometric regime of training.
+
 
 ## Why TopoAdamW?
 
 Training neural networks with a fixed learning rate is like driving with cruise control on a mountain road. TopoAdamW acts as an intelligent co-pilot:
 
-1. Topological awareness: probes local geometry (flatness/sharpness) of the loss landscape.
+1. Topological awareness: probes **local geometric regimes** (e.g., flatness, sharpness, instability) of the loss landscape.
 2. Dynamic adjustment: scales LR within [min_lr_ratio, max_lr_ratio] (defaults 0.2 to 1.0; raise max_lr_ratio to allow acceleration).
-3. Safety lock: if center loss spikes above 2x EMA, a divergence brake overrides acceleration and reduces LR.
+3. Safety lock: if center loss spikes above 2× EMA, a divergence brake overrides acceleration and reduces LR to prevent unstable updates.
 
-Result: faster convergence on smooth terrain, stable behavior on rough terrain.
+Result: accelerated progress in smooth regimes and stabilized behavior in sharp or noisy regimes.
 
-## Performance (SOTA-Level Results)
+## Performance (Proof-of-Concept Results)
 
 We benchmarked TopoAdamW against standard AdamW on CIFAR-10 using a CifarNet architecture. Both optimizers used the same base learning rate (1e-3), weight decay (5e-4), and ran for 30 epochs.
 
-The result: TopoAdamW achieved a +0.91% accuracy boost over AdamW, breaking past the late-epoch plateau.
+In this setup, TopoAdamW achieved a +0.91% accuracy improvement over AdamW and avoided late-epoch loss plateaus observed in the baseline.
 
 ![Comparison Results](assets/comparison_results.png)
 
 ### Benchmark Metrics
+
+The following heuristics implement a **lightweight control policy** that maps geometric indicators to learning rate scaling factors:
 
 | Metric | AdamW (Baseline) | TopoAdamW (Ours) | Improvement |
 | :--- | :--- | :--- | :--- |
@@ -34,6 +40,10 @@ The result: TopoAdamW achieved a +0.91% accuracy boost over AdamW, breaking past
 | Overhead | ~12.2s / epoch | ~14.3s / epoch | ~17% increase |
 
 > Observation: As shown in the graph, AdamW's loss curve flattens out near Epoch 20-25, while TopoAdamW continues to lower loss through the end of training.
+
+
+These rules are intentionally simple and interpretable; TopoAdamW is designed as a **training dynamics controller**, not a second-order optimizer or a minimum-finding algorithm.
+
 
 ## 🚀 Quick Start
 
@@ -99,11 +109,15 @@ optimizer = TopoAdamW(
 
 ## 🔬 How It Works
 
-TopoAdam uses **Topological Data Analysis** to understand your loss landscape geometry:
+TopoAdamW uses Topological Data Analysis (TDA) to **identify local training regimes** in the loss landscape:
 
-1. **Probe** 🔍: Periodically samples the loss landscape around the current parameters
-2. **Analyze** 📐: Extracts geometric features (sharpness, variance) using TDA
-3. **Adapt** 🎯: Adjusts learning rate based on landscape topology
+1. **Probe** 🔍: Periodically samples a local neighborhood of the loss surface around current parameters  
+2. **Analyze** 📐: Extracts **topology-robust geometric summaries** (e.g., persistence-based sharpness and variability indicators)  
+3. **Adapt** 🎯: Adjusts the **global learning rate multiplier**, acting as a step-size controller rather than a direction optimizer
+
+**Note:** TopoAdamW does not aim to locate exact minima of the loss function. 
+Instead, it focuses on identifying geometric regimes of training and adapting step size accordingly, complementing the underlying optimizer rather than replacing it.
+
 
 ### Geometric Heuristics
 
@@ -204,7 +218,7 @@ If you use TopoAdam in your research, please cite:
 ```bibtex
 @software{topoadamw2025,
   author = {Congkai Peng},
-  title = {TopoAdam: Topology-Guided Adaptive Optimizer},
+  title = {TopoAdamW: Topology-Guided Learning Rate Control for Neural Network Training},
   year = {2025},
   publisher = {GitHub},
   url = {https://github.com/SVAH-X/topoadamw}
@@ -235,13 +249,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Uses GUDHI library for topological computations
 - Inspired by modern adaptive optimizer research
 
----
-
-**Made with ❤️ for better deep learning**
-
-⭐ **Star this repo** if you find it useful!  
-🐛 **Report issues** on GitHub  
-💬 **Questions?** Open a discussion
 
 
 
