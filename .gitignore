@@ -13,6 +13,7 @@ data/
 *.npz
 *.pth
 *.ckpt
+*_history.json
 
 # Plots  
 *.png
@@ -26,5 +27,4 @@ data/
 # OS
 .DS_Store
 Thumbs.db
-
 

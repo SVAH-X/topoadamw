@@ -37,7 +37,7 @@ class TopoCNN(nn.Module):
     
     
 class CifarNet(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes: int = 10):
         super(CifarNet, self).__init__()
         self.features = nn.Sequential(
             # 32x32 -> 16x16
@@ -62,7 +62,7 @@ class CifarNet(nn.Module):
             nn.Flatten(),
             nn.Linear(128 * 4 * 4, 512),
             nn.ReLU(),
-            nn.Linear(512, 10)
+            nn.Linear(512, num_classes)
         )
 
     def forward(self, x):

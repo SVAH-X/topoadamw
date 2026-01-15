@@ -26,9 +26,13 @@ We benchmarked TopoAdamW against standard AdamW on CIFAR-10 using a CifarNet arc
 
 In this setup, TopoAdamW achieved a +0.91% accuracy improvement over AdamW and avoided late-epoch loss plateaus observed in the baseline.
 
-![Comparison Results](assets/comparison_results.png)
+CIFAR-10 comparison:
+![CIFAR-10 Comparison](assets/comparison_results.png)
 
-### Benchmark Metrics
+CIFAR-100 comparison (default CIFAR-100 hyperparams):
+![CIFAR-100 Comparison](assets/comparison_results_cifar100.png)
+
+### Benchmark Metrics (CIFAR-10)
 
 The following heuristics implement a **lightweight control policy** that maps geometric indicators to learning rate scaling factors:
 
@@ -55,7 +59,7 @@ git clone https://github.com/SVAH-X/topoadamw.git
 cd topoadamw
 
 # Install dependencies
-pip install torch torchvision numpy gudhi
+pip install -r requirements.txt
 ```
 
 ### Basic Usage
@@ -140,10 +144,12 @@ topoadamw/
 │   └── tda_utils.py        # Topological analysis
 ├── examples/
 │   ├── cifar10_example.py      # CIFAR-10 training
+│   ├── cifar100_example.py     # CIFAR-100 training
 │   └── custom_model_example.py # Custom model usage
 ├── tests/
 │   └── test_optimizer.py       # Unit tests
 ├── generate_comparison_plot.py # Reproduce benchmark
+├── requirements.txt            # Project dependencies
 ├── README.md
 └── LICENSE
 ```
@@ -156,7 +162,14 @@ Generate the comparison plot yourself:
 python generate_comparison_plot.py
 ```
 
-This trains AdamW and TopoAdamW on CIFAR-10 and produces `comparison_results.png`.
+By default, this trains AdamW and TopoAdamW on CIFAR-10 and CIFAR-100 and produces
+`comparison_results.png` (CIFAR-10) and `comparison_results_cifar100.png` (also saved under `assets/`).
+
+To run a single dataset:
+
+```bash
+python generate_comparison_plot.py --datasets cifar100
+```
 
 Run unit tests:
 
@@ -175,6 +188,14 @@ python examples/cifar10_example.py
 ```
 
 Trains a CNN on CIFAR-10 with full data augmentation and model checkpointing.
+
+### CIFAR-100 Image Classification
+
+```bash
+python examples/cifar100_example.py
+```
+
+Trains CifarNet on CIFAR-100 with the recommended TopoAdamW defaults.
 
 ### Custom Model
 
@@ -248,9 +269,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Built on PyTorch's optimization framework
 - Uses GUDHI library for topological computations
 - Inspired by modern adaptive optimizer research
-
-
-
 
 
 

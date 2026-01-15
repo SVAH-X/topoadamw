@@ -44,3 +44,5 @@ setup_args = dict(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
 )
+
+setup(**setup_args)

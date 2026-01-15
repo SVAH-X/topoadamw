@@ -1,5 +1,5 @@
 ﻿"""
-Benchmark AdamW and TopoAdamW on CIFAR-10 and save comparison plots.
+Benchmark AdamW and TopoAdamW on CIFAR-10/100 and save comparison plots.
 """
 
 import argparse
@@ -19,6 +19,58 @@ import matplotlib.pyplot as plt
 
 from topoadamw import TopoAdamW
 from models import CifarNet
+
+CONFIG_KEYS = (
+    "epochs",
+    "batch_size",
+    "lr",
+    "weight_decay",
+    "interval",
+    "warmup_steps",
+    "probe_grid",
+    "probe_span",
+    "max_lr_ratio",
+    "min_lr_ratio",
+)
+
+DATASET_SPECS = {
+    "cifar10": {
+        "dataset_cls": datasets.CIFAR10,
+        "num_classes": 10,
+        "mean": (0.4914, 0.4822, 0.4465),
+        "std": (0.2023, 0.1994, 0.2010),
+        "defaults": {
+            "epochs": 30,
+            "batch_size": 128,
+            "lr": 1e-3,
+            "weight_decay": 5e-4,
+            "interval": 50,
+            "warmup_steps": 150,
+            "probe_grid": 15,
+            "probe_span": 0.12,
+            "max_lr_ratio": 1.0,
+            "min_lr_ratio": 0.2,
+        },
+    },
+    "cifar100": {
+        "dataset_cls": datasets.CIFAR100,
+        "num_classes": 100,
+        "mean": (0.5071, 0.4867, 0.4408),
+        "std": (0.2675, 0.2565, 0.2761),
+        "defaults": {
+            "epochs": 100,
+            "batch_size": 128,
+            "lr": 5e-4,
+            "weight_decay": 5e-4,
+            "interval": 100,
+            "warmup_steps": 300,
+            "probe_grid": 11,
+            "probe_span": 0.10,
+            "max_lr_ratio": 1.0,
+            "min_lr_ratio": 0.3,
+        },
+    },
+}
 
 
 def set_seed(seed: int) -> None:
@@ -45,11 +97,10 @@ def build_loaders(
     batch_size: int,
     num_workers: int,
     subset: int,
+    dataset_name: str,
 ) -> Tuple[DataLoader, DataLoader]:
-    normalize = transforms.Normalize(
-        mean=(0.4914, 0.4822, 0.4465),
-        std=(0.2023, 0.1994, 0.2010),
-    )
+    spec = DATASET_SPECS[dataset_name]
+    normalize = transforms.Normalize(mean=spec["mean"], std=spec["std"])
     train_tf = transforms.Compose(
         [
             transforms.RandomCrop(32, padding=4),
@@ -60,12 +111,9 @@ def build_loaders(
     )
     test_tf = transforms.Compose([transforms.ToTensor(), normalize])
 
-    train_set = datasets.CIFAR10(
-        root=data_dir, train=True, download=True, transform=train_tf
-    )
-    test_set = datasets.CIFAR10(
-        root=data_dir, train=False, download=True, transform=test_tf
-    )
+    dataset_cls = spec["dataset_cls"]
+    train_set = dataset_cls(root=data_dir, train=True, download=True, transform=train_tf)
+    test_set = dataset_cls(root=data_dir, train=False, download=True, transform=test_tf)
 
     if subset and subset > 0:
         train_indices = list(range(min(subset, len(train_set))))
@@ -158,9 +206,10 @@ def run_experiment(
     device: torch.device,
     epochs: int,
     seed: int,
+    num_classes: int,
 ) -> Dict[str, List[float]]:
     set_seed(seed)
-    model = CifarNet().to(device)
+    model = CifarNet(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = make_optimizer(model)
 
@@ -221,8 +270,8 @@ def run_experiment(
     return history
 
 
-def summarize_results(results: Dict[str, Dict[str, List[float]]]) -> None:
-    print("\nSummary (final epoch values)")
+def summarize_results(results: Dict[str, Dict[str, List[float]]], label: str) -> None:
+    print(f"\nSummary ({label} final epoch values)")
     header = f"{'Optimizer':<10} {'Val Loss':>10} {'Acc':>8} {'Stability':>10} {'Convergence':>12}"
     print(header)
     print("-" * len(header))
@@ -242,7 +291,9 @@ def summarize_results(results: Dict[str, Dict[str, List[float]]]) -> None:
         )
 
 
-def save_plot(results: Dict[str, Dict[str, List[float]]], out_path: str) -> None:
+def save_plot(
+    results: Dict[str, Dict[str, List[float]]], out_path: str, title: str
+) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 7))
     axes = axes.flatten()
 
@@ -268,24 +319,29 @@ def save_plot(results: Dict[str, Dict[str, List[float]]], out_path: str) -> None
         ax.grid(True, alpha=0.3)
 
     axes[1].legend()
-    fig.suptitle("CIFAR-10 Metrics")
+    fig.suptitle(title)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(out_path, dpi=200)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="TopoAdamW CIFAR-10 benchmark")
+    parser = argparse.ArgumentParser(description="TopoAdamW CIFAR-10/100 benchmark")
+    parser.add_argument(
+        "--datasets",
+        default="cifar10,cifar100",
+        help="Comma-separated list: cifar10,cifar100",
+    )
     parser.add_argument("--data-dir", default="data", help="Dataset directory")
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight-decay", type=float, default=5e-4)
-    parser.add_argument("--interval", type=int, default=50)
-    parser.add_argument("--warmup-steps", type=int, default=150)
-    parser.add_argument("--probe-grid", type=int, default=15)
-    parser.add_argument("--probe-span", type=float, default=0.12)
-    parser.add_argument("--max-lr-ratio", type=float, default=1.0)
-    parser.add_argument("--min-lr-ratio", type=float, default=0.2)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--interval", type=int, default=None)
+    parser.add_argument("--warmup-steps", type=int, default=None)
+    parser.add_argument("--probe-grid", type=int, default=None)
+    parser.add_argument("--probe-span", type=float, default=None)
+    parser.add_argument("--max-lr-ratio", type=float, default=None)
+    parser.add_argument("--min-lr-ratio", type=float, default=None)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--subset", type=int, default=0, help="Limit data for quick runs")
     parser.add_argument("--seed", type=int, default=42)
@@ -294,69 +350,89 @@ def main() -> None:
     os.makedirs(args.data_dir, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader, test_loader = build_loaders(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        subset=args.subset,
-    )
-    print(
-        f"Data ready | Train samples={len(train_loader.dataset)} | "
-        f"Val samples={len(test_loader.dataset)} | Batch size={args.batch_size}"
-    )
-    print(
-        f"Hyperparams | lr={args.lr} | weight_decay={args.weight_decay} | "
-        f"interval={args.interval} | warmup_steps={args.warmup_steps} | "
-        f"probe_grid={args.probe_grid} | probe_span={args.probe_span} | "
-        f"max_lr_ratio={args.max_lr_ratio} | min_lr_ratio={args.min_lr_ratio}"
-    )
+    requested = [name.strip().lower() for name in args.datasets.split(",") if name.strip()]
+    unknown = [name for name in requested if name not in DATASET_SPECS]
+    if unknown:
+        raise ValueError(f"Unknown datasets: {', '.join(unknown)}")
 
-    def make_adamw(model: nn.Module):
-        return optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    for dataset_name in requested:
+        spec = DATASET_SPECS[dataset_name]
+        cfg = spec["defaults"].copy()
+        for key in CONFIG_KEYS:
+            value = getattr(args, key)
+            if value is not None:
+                cfg[key] = value
 
-    def make_topoadamw(model: nn.Module):
-        return TopoAdamW(
-            model.parameters(),
-            model,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            interval=args.interval,
-            warmup_steps=args.warmup_steps,
-            max_lr_ratio=args.max_lr_ratio,
-            min_lr_ratio=args.min_lr_ratio,
-            probe_kwargs={"grid_size": args.probe_grid, "span": args.probe_span},
+        train_loader, test_loader = build_loaders(
+            data_dir=args.data_dir,
+            batch_size=cfg["batch_size"],
+            num_workers=args.num_workers,
+            subset=args.subset,
+            dataset_name=dataset_name,
+        )
+        print(f"\n=== Dataset: {dataset_name.upper()} ===")
+        print(
+            f"Data ready | Train samples={len(train_loader.dataset)} | "
+            f"Val samples={len(test_loader.dataset)} | Batch size={cfg['batch_size']}"
+        )
+        print(
+            f"Hyperparams | epochs={cfg['epochs']} | lr={cfg['lr']} | "
+            f"weight_decay={cfg['weight_decay']} | interval={cfg['interval']} | "
+            f"warmup_steps={cfg['warmup_steps']} | probe_grid={cfg['probe_grid']} | "
+            f"probe_span={cfg['probe_span']} | max_lr_ratio={cfg['max_lr_ratio']} | "
+            f"min_lr_ratio={cfg['min_lr_ratio']}"
         )
 
-    experiments = [
-        ("AdamW", make_adamw),
-        ("TopoAdamW", make_topoadamw),
-    ]
+        def make_adamw(model: nn.Module):
+            return optim.AdamW(
+                model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"]
+            )
 
-    results: Dict[str, Dict[str, List[float]]] = {}
-    for name, make_opt in experiments:
-        print(f"\nStarting run for {name}...")
-        results[name] = run_experiment(
-            name=name,
-            make_optimizer=make_opt,
-            train_loader=train_loader,
-            test_loader=test_loader,
-            device=device,
-            epochs=args.epochs,
-            seed=args.seed,
-        )
+        def make_topoadamw(model: nn.Module):
+            return TopoAdamW(
+                model.parameters(),
+                model,
+                lr=cfg["lr"],
+                weight_decay=cfg["weight_decay"],
+                interval=cfg["interval"],
+                warmup_steps=cfg["warmup_steps"],
+                max_lr_ratio=cfg["max_lr_ratio"],
+                min_lr_ratio=cfg["min_lr_ratio"],
+                probe_kwargs={"grid_size": cfg["probe_grid"], "span": cfg["probe_span"]},
+            )
 
-    out_file = "comparison_results.png"
-    save_plot(results, out_file)
+        experiments = [
+            ("AdamW", make_adamw),
+            ("TopoAdamW", make_topoadamw),
+        ]
 
-    os.makedirs("assets", exist_ok=True)
-    assets_path = os.path.join("assets", out_file)
-    save_plot(results, assets_path)
+        results: Dict[str, Dict[str, List[float]]] = {}
+        for name, make_opt in experiments:
+            print(f"\nStarting run for {name}...")
+            results[name] = run_experiment(
+                name=name,
+                make_optimizer=make_opt,
+                train_loader=train_loader,
+                test_loader=test_loader,
+                device=device,
+                epochs=cfg["epochs"],
+                seed=args.seed,
+                num_classes=spec["num_classes"],
+            )
 
-    summarize_results(results)
-    print(f"\nSaved plots: {out_file} and {assets_path}")
+        if dataset_name == "cifar10":
+            out_file = "comparison_results.png"
+        else:
+            out_file = f"comparison_results_{dataset_name}.png"
+        save_plot(results, out_file, title=f"{dataset_name.upper()} Metrics")
+
+        os.makedirs("assets", exist_ok=True)
+        assets_path = os.path.join("assets", out_file)
+        save_plot(results, assets_path, title=f"{dataset_name.upper()} Metrics")
+
+        summarize_results(results, label=dataset_name.upper())
+        print(f"\nSaved plots: {out_file} and {assets_path}")
 
 
 if __name__ == "__main__":
     main()
-
-
