@@ -47,13 +47,14 @@ The following heuristics implement a **lightweight control policy** that maps ge
 
 ### Benchmark Metrics (CIFAR-100)
 
-From the 100-epoch CIFAR-100 run (lr=5e-4, weight_decay=5e-4, interval=100, warmup_steps=300):
+From the 100-epoch CIFAR-100 run on CPU (lr=5e-4, weight_decay=5e-4, interval=100, warmup_steps=300):
 
 | Metric | AdamW (Baseline) | TopoAdamW (Ours) | Improvement |
 | :--- | :--- | :--- | :--- |
 | Val Accuracy | 57.23% | 58.69% | +1.46% |
 | Final Val Loss | 1.9505 | 1.8631 | Lower loss |
 | Stability (Val Loss Std) | 0.1822 | 0.1826 | Similar |
+| Avg Epoch Time | 63.1s | 79.3s | Overhead +16.2s/epoch |
 | Convergence | Stable | Stable | — |
 
 
@@ -280,7 +281,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Built on PyTorch's optimization framework
 - Uses GUDHI library for topological computations
 - Inspired by modern adaptive optimizer research
-
 
 
 
