@@ -45,6 +45,17 @@ The following heuristics implement a **lightweight control policy** that maps ge
 
 > Observation: As shown in the graph, AdamW's loss curve flattens out near Epoch 20-25, while TopoAdamW continues to lower loss through the end of training.
 
+### Benchmark Metrics (CIFAR-100)
+
+From the 100-epoch CIFAR-100 run (lr=5e-4, weight_decay=5e-4, interval=100, warmup_steps=300):
+
+| Metric | AdamW (Baseline) | TopoAdamW (Ours) | Improvement |
+| :--- | :--- | :--- | :--- |
+| Val Accuracy | 57.23% | 58.69% | +1.46% |
+| Final Val Loss | 1.9505 | 1.8631 | Lower loss |
+| Stability (Val Loss Std) | 0.1822 | 0.1826 | Similar |
+| Convergence | Stable | Stable | — |
+
 
 These rules are intentionally simple and interpretable; TopoAdamW is designed as a **training dynamics controller**, not a second-order optimizer or a minimum-finding algorithm.
 
@@ -269,7 +280,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Built on PyTorch's optimization framework
 - Uses GUDHI library for topological computations
 - Inspired by modern adaptive optimizer research
-
 
 
 
