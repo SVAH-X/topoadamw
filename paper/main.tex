@@ -1,0 +1,452 @@
+\documentclass{article}
+
+% -- Packages ------------------------------------------------------------------
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{natbib}
+
+% -- Macros --------------------------------------------------------------------
+\newcommand{\topoadamw}{\textsc{TopoAdamW}}
+\newcommand{\topoadamwtda}{\textsc{TopoAdamW-TDA}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+% -- Title ---------------------------------------------------------------------
+\title{\topoadamw: Topology-Guided Learning Rate Adaptation\\
+       via Loss Landscape Geometry}
+
+\author{Congkai Peng \\
+        \texttt{kelvinpeng2004@outlook.com}}
+
+\date{}
+
+% ==============================================================================
+\begin{document}
+\maketitle
+
+% -- Abstract ------------------------------------------------------------------
+\begin{abstract}
+We introduce \topoadamw, a learning rate controller built on top of AdamW that
+adapts the step size at each interval by probing the local geometry of the loss
+landscape.  Every $T$ optimisation steps the method evaluates a sparse 25-point
+neighbourhood in a two-dimensional random subspace of parameter space, extracts
+\emph{sharpness} and \emph{variance} features, and scales the learning rate
+according to a geometric heuristic: accelerate in flat, smooth regions; slow
+down near sharp or noisy regions.  Optionally, a small convolutional network
+(\textsc{TopoCNN}) trained online on topological persistence images replaces the
+hand-coded heuristic once sufficient training data has been collected.
+On CIFAR-10 and CIFAR-100 the heuristic mode outperforms a tuned AdamW baseline
+by $+1.43\%$ and $+1.50\%$ accuracy respectively, with approximately $14\%$
+additional per-epoch wall-clock time.  The \textsc{TopoCNN} variant achieves
+$+1.51\%$ and $+1.46\%$ at $22\%$ overhead.  \topoadamw\ is available as an
+open-source PyTorch package at \url{https://github.com/SVAH-X/topoadamw} and on
+PyPI (\texttt{pip install topoadamw}).
+\end{abstract}
+
+
+% ==============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+The learning rate is the single most consequential hyperparameter in deep
+learning optimisation.  Too large and training diverges; too small and
+convergence is needlessly slow.  Despite decades of research on adaptive
+optimisers~\citep{kingma2014adam,loshchilov2017adamw} and learning rate
+schedules~\citep{smith2017cyclical,loshchilov2016sgdr}, the dominant paradigm
+remains \emph{fixed or schedule-driven}: the step size is determined before
+training begins, without reference to what the loss landscape actually looks like
+at any given point in the optimisation trajectory.
+
+A body of work in loss landscape
+visualisation~\citep{li2018visualizing,goodfellow2015qualitatively} shows that
+the curvature of the landscape changes substantially over the course of training
+and differs qualitatively across architectures.  Sharp minima correlate with poor
+generalisation~\citep{hochreiter1997flat,keskar2016large}; flat regions can be
+traversed faster without risk.  These observations suggest an opportunity: if we
+can \emph{detect} the current geometric regime on-the-fly, we can adjust the
+learning rate accordingly.
+
+Topological Data Analysis (TDA) provides a principled framework for
+characterising the shape of a function from a finite set of
+samples~\citep{edelsbrunner2010computational,carlsson2009topology}.  Persistent
+homology, in particular, captures multi-scale connectivity and loop structure
+in a representation (the \emph{persistence diagram}) that is stable under
+small perturbations~\citep{cohen2007stability}.  Recent work has applied TDA
+to neural network loss landscapes~\citep{rieck2019neural} and to characterising the training
+dynamics \todo{(add further citations here)}.
+
+We make the following contributions:
+\begin{enumerate}
+  \item \textbf{\topoadamw\ (heuristic mode).}  A lightweight LR controller
+        that probes 25 points in a 2D filter-normalised random subspace every
+        $T$ steps and applies a sharpness/variance heuristic to scale the LR.
+        Total overhead per probe is $\mathcal{O}(25 \cdot C_\text{fwd})$ where
+        $C_\text{fwd}$ is the cost of one forward pass.
+
+  \item \textbf{\topoadamwtda\ (\textsc{TopoCNN} mode).}  An extension that
+        computes a persistence image of the local loss surface and feeds it to a
+        small CNN classifier, \textsc{TopoCNN}, which is bootstrapped online from
+        the heuristic labels.  This replaces the hand-coded decision boundary
+        with a learned one once enough samples are available.
+
+  \item \textbf{Open-source release.}  A drop-in PyTorch replacement for
+        \texttt{torch.optim.AdamW} with no new required dependencies
+        (\texttt{gudhi} is optional).
+\end{enumerate}
+
+
+% ==============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Adaptive optimisers.}
+Adam~\citep{kingma2014adam} and AdamW~\citep{loshchilov2017adamw} maintain
+per-parameter second-moment estimates to adapt effective step sizes.
+AMSGrad~\citep{reddi2018convergence} fixes a convergence issue in Adam.
+Adagrad~\citep{duchi2011adaptive} and RMSProp accumulate squared gradients.
+All of these are \emph{gradient-based} adaptations: the geometry signal comes
+entirely from the gradient sequence, not from explicit landscape probing.
+\topoadamw\ is orthogonal—it wraps any base optimiser and adjusts the global LR
+using geometric information from forward-pass evaluations.
+
+\paragraph{Learning rate schedules.}
+Cosine annealing~\citep{loshchilov2016sgdr}, warmup, and
+cyclical schedules~\citep{smith2017cyclical} modulate the LR as a function of
+time, not landscape geometry.
+ReduceLROnPlateau monitors validation loss and halves the LR on plateaus.
+\topoadamw\ instead reacts to the \emph{current} local geometry, independent of
+wall-clock time or plateau detection.
+
+\paragraph{Sharpness-Aware Minimisation (SAM).}
+SAM~\citep{foret2021sharpness} explicitly seeks flat minima by perturbing
+parameters in the gradient direction and computing a second backward pass.
+Unlike \topoadamw, SAM modifies the gradient rather than the learning rate, and
+requires two backward passes per step versus our one forward pass per probe step.
+The two approaches are complementary and could in principle be combined.
+
+\paragraph{Loss landscape geometry.}
+\citet{li2018visualizing} introduced filter-wise normalisation for 2D loss
+landscape visualisation, which we adopt for our random subspace directions.
+\citet{keskar2016large} showed empirically that large-batch training converges to
+sharper minima with worse generalisation, motivating sharpness as a useful proxy.
+
+\paragraph{TDA in machine learning.}
+Persistent homology has been used to analyse the topology of data
+manifolds~\citep{carlsson2009topology}, to regularise neural
+networks~\citep{chen2019topological}, and to study loss
+landscapes~\citep{rieck2019neural}.  To our knowledge, \topoadamw\ is the first
+work to close the loop by using persistence images as an \emph{online} control
+signal for learning rate adaptation.
+
+
+% ==============================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Loss Landscape Probing}
+\label{sec:probe}
+
+Let $\theta^* \in \R^D$ denote the current parameter vector.  We sample two
+filter-normalised random directions $\mathbf{d}_1, \mathbf{d}_2 \in \R^D$
+following \citet{li2018visualizing}: for each layer $\ell$ with weight tensor
+$W_\ell$, a random tensor of the same shape is drawn and rescaled filter-wise so
+that each filter's norm matches that of the corresponding filter in $W_\ell$.
+The directions are concatenated into flat vectors and the loss is evaluated on a
+mini-batch $(\mathbf{x}, \mathbf{y})$ at perturbed parameters
+\begin{equation}
+  \theta(u,v) = \theta^* + u\,\mathbf{d}_1 + v\,\mathbf{d}_2, \quad
+  (u,v) \in \mathcal{C},
+\end{equation}
+where $\mathcal{C}$ is a set of evaluation coordinates.
+
+\paragraph{Sparse probe (heuristic mode).}
+We evaluate at 25 coordinates: the centre $(0,0)$, eight axis-aligned and
+diagonal neighbours at step size $h = 2\delta/(G-1)$ (matching one grid cell
+width for reference grid size $G=15$ and span $\delta=0.12$), and $n_s = 16$
+uniform random samples within $[-\delta, \delta]^2$.  Total cost: 25 forward
+passes.
+
+\paragraph{Dense probe (TDA mode).}
+For the persistence image we evaluate a $G_{\text{tda}} \times G_{\text{tda}}$
+regular grid (default $G_{\text{tda}} = 7$, i.e.\ 49 forward passes).
+
+In both cases the model parameters are restored exactly after probing (no
+gradient computation; executed under \texttt{torch.no\_grad()}).
+
+\subsection{Geometric Feature Extraction}
+\label{sec:features}
+
+From the sparse probe we extract two scalar features:
+
+\begin{align}
+  \text{Sharpness} &= \frac{\bar{\ell}_\text{nbr} - \ell_0}{\ell_0 + \epsilon},
+  \label{eq:sharpness} \\
+  \text{Variance}  &= \frac{\sigma(\{\ell_i\}_{i=1}^{25})}
+                          {\mu(\{\ell_i\}_{i=1}^{25}) + \epsilon},
+  \label{eq:variance}
+\end{align}
+where $\ell_0$ is the centre loss, $\bar{\ell}_\text{nbr}$ is the mean of the
+eight neighbour losses, $\sigma$ and $\mu$ are sample standard deviation and
+mean over all 25 losses, and $\epsilon = 10^{-8}$.  Sharpness measures how much
+the immediate neighbourhood rises above the current position; variance measures
+overall roughness of the sampled region.
+
+\subsection{Heuristic Learning Rate Controller}
+\label{sec:heuristic}
+
+Given the features above, the LR scaling factor $\rho$ is determined by:
+
+\begin{equation}
+  \rho = \begin{cases}
+    1.15 & \text{if sharpness} < 0.1 \text{ and variance} < 0.3
+            \quad\text{(flat \& smooth)} \\
+    0.80 & \text{if sharpness} > 0.5
+            \quad\text{(very sharp)} \\
+    0.85 & \text{if variance} > 0.5
+            \quad\text{(high variance)} \\
+    0.95 & \text{if sharpness} > 0.2
+            \quad\text{(moderately sharp)} \\
+    1.00 & \text{otherwise (neutral)}
+  \end{cases}
+  \label{eq:heuristic}
+\end{equation}
+
+A \emph{divergence brake} overrides Eq.~\eqref{eq:heuristic}: if the current
+centre loss exceeds $2\times$ the exponential moving average
+$\hat{\ell} \leftarrow 0.2\,\ell_0 + 0.8\,\hat{\ell}$, then $\rho = 0.8$
+regardless.  The new LR for group $i$ is clipped to
+$[\alpha_i^0 \cdot r_{\min}^{(i)},\; \alpha_i^0 \cdot r_{\max}^{(i)}]$ where
+$\alpha_i^0$ is the initial LR and $r_{\min}^{(i)}, r_{\max}^{(i)}$ are
+per-group floor and ceiling ratios (defaults $0.2$ and $1.0$).
+
+\subsection{Persistence Image and TopoCNN}
+\label{sec:tda}
+
+\paragraph{Persistence image.}
+Given the $G_{\text{tda}} \times G_{\text{tda}}$ loss grid, we run a cubical
+complex persistent homology computation~\citep{edelsbrunner2010computational}
+using GUDHI~\citep{gudhi} and extract the $H_0$ (connected component) birth–death
+pairs $(b_k, d_k)$.  We map each pair to image coordinates via log-ratio
+transforms centred on the current loss $\ell_0$:
+\begin{align}
+  x_k &= \frac{\log(\ell_0 / (b_k + \epsilon))}{\log \kappa},\quad
+  y_k  = \frac{\log(d_k / (\ell_0 + \epsilon))}{\log \kappa},
+\end{align}
+clipped to $[0,1]^2$, with cap $\kappa = 5$.  We render a $50\times50$ Gaussian
+persistence image~\citep{adams2017persistence} weighted by distance from the
+origin, stacked as a 2-channel tensor $(I, I)$ for \textsc{TopoCNN} input.
+
+\paragraph{TopoCNN architecture.}
+\textsc{TopoCNN} is a small CNN that maps $(2, 50, 50)$ persistence images to
+three landscape regime logits: \textsc{flat} (LR $\times 1.15$),
+\textsc{neutral} (LR $\times 1.00$), and \textsc{decel} (LR $\times 0.85$).
+The architecture is: Conv(2$\to$16, $3\times3$) $\to$ ReLU $\to$ MaxPool $\to$
+Conv(16$\to$32) $\to$ ReLU $\to$ MaxPool $\to$ Conv(32$\to$64) $\to$ ReLU
+$\to$ AdaptiveAvgPool $\to$ Linear(64$\to$32) $\to$ ReLU $\to$ Linear(32$\to$3).
+
+\paragraph{Online bootstrapping.}
+Supervision is obtained from the geometric heuristic (Section~\ref{sec:heuristic}).
+A ring buffer of capacity 500 stores $(I_t, y_t)$ pairs where $y_t$ is the
+heuristic label.  Once the buffer reaches 100 samples, \textsc{TopoCNN} is
+trained for 20 gradient steps; thereafter it is retrained every 25 new samples.
+Before training is complete, the optimizer falls back to the heuristic.
+
+\subsection{Full Algorithm}
+\label{sec:algorithm}
+
+\begin{algorithm}[h]
+\caption{\topoadamw\ training step}
+\begin{algorithmic}[1]
+  \Require model $f_\theta$, base AdamW optimizer, batch $(\mathbf{x}, \mathbf{y})$,
+           criterion $\mathcal{L}$, interval $T$, warmup $W$
+  \State Compute $\hat{y} = f_\theta(\mathbf{x})$; $\ell = \mathcal{L}(\hat{y}, \mathbf{y})$
+  \State $\ell$.backward(); \textsc{AdamW}.step(); $t \leftarrow t + 1$
+  \If{$t > W$ \textbf{and} $t \bmod T = 0$}
+    \State Sample directions $\mathbf{d}_1, \mathbf{d}_2$ (filter-normalised)
+    \State Evaluate losses at $\mathcal{C}$ under \texttt{no\_grad}; restore $\theta$
+    \State Compute sharpness, variance (Eqs.~\ref{eq:sharpness}--\ref{eq:variance})
+    \If{use\_topo\_cnn \textbf{and} \textsc{TopoCNN} is ready}
+      \State $\rho \leftarrow$ \textsc{TopoCNN}(persistence image)
+    \Else
+      \State $\rho \leftarrow$ heuristic (Eq.~\ref{eq:heuristic})
+    \EndIf
+    \If{$\ell_0 > 2\hat{\ell}$} $\rho \leftarrow 0.8$ \EndIf \Comment{divergence brake}
+    \State Update $\alpha \leftarrow \text{clip}(\alpha \cdot \rho,\; \alpha^0 r_{\min},\; \alpha^0 r_{\max})$
+  \EndIf
+\end{algorithmic}
+\end{algorithm}
+
+
+% ==============================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+\label{sec:setup}
+
+\paragraph{Model.}  We use CifarNet, a five-block convolutional network
+(Conv $\to$ BatchNorm $\to$ ReLU $\to$ MaxPool, followed by a two-layer MLP
+classifier) with approximately \todo{X}M parameters.
+
+\paragraph{Datasets.}  CIFAR-10 and CIFAR-100~\citep{krizhevsky2009learning},
+split into 50,000 training and 10,000 test images of size $32\times32$.
+Standard data augmentation: random horizontal flip and random crop with padding 4.
+
+\paragraph{Training details.}  Batch size 128; weight decay $5\times10^{-4}$;
+50 epochs for CIFAR-10 (lr $10^{-3}$), 100 epochs for CIFAR-100 (lr
+$5\times10^{-4}$).  \topoadamw\ parameters: $T=50$, $W=150$,
+$r_{\max}=1.0$, $r_{\min}=0.2$, span $\delta=0.12$, $n_s=16$.
+All experiments run on \todo{hardware spec}.  \todo{Report mean $\pm$ std over
+N seeds.}
+
+\subsection{Main Results}
+\label{sec:results}
+
+\begin{table}[h]
+\centering
+\caption{Validation accuracy and loss on CIFAR-10 (50 epochs) and CIFAR-100
+         (100 epochs).  \todo{Add mean $\pm$ std over 5 seeds.}}
+\label{tab:main}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{CIFAR-10} & & \multicolumn{2}{c}{CIFAR-100} \\
+\cmidrule{2-3} \cmidrule{5-6}
+Optimizer & Acc (\%) & Loss & & Acc (\%) & Loss \\
+\midrule
+AdamW (baseline)          & 84.76 & 0.4983 & & 57.26 & 1.9423 \\
+\topoadamw\ (heuristic)   & 86.19 & 0.4523 & & 58.76 & 1.7980 \\
+\topoadamwtda\ (TopoCNN)  & \textbf{86.27} & \textbf{0.4559} & & 58.72 & 1.8520 \\
+\midrule
+$\Delta$ (heuristic vs.\ AdamW) & $+1.43$ & $-0.046$ & & $+1.50$ & $-0.144$ \\
+$\Delta$ (TDA vs.\ AdamW)       & $+1.51$ & $-0.042$ & & $+1.46$ & $-0.090$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.48\textwidth]{../assets/comparison_results.png}
+\hfill
+\includegraphics[width=0.48\textwidth]{../assets/comparison_results_cifar100.png}
+\caption{Training and validation curves on CIFAR-10 (left) and CIFAR-100
+         (right).  \topoadamw\ reaches higher accuracy faster in both cases.}
+\label{fig:curves}
+\end{figure}
+
+\paragraph{CIFAR-10.}
+Both \topoadamw\ variants outperform AdamW by over 1.4 percentage points.
+The \textsc{TopoCNN} variant marginally exceeds the heuristic ($+0.08\%$),
+suggesting the learned classifier adds modest benefit at 50 epochs.
+
+\paragraph{CIFAR-100.}
+Over 100 epochs the \textsc{TopoCNN} mode keeps the LR higher for longer
+(epochs 1--36 at full LR vs.\ heuristic which begins cutting at epoch 30),
+then cuts decisively, squeezing additional training progress before regularising.
+This behaviour emerges automatically from the online bootstrapping, without any
+schedule engineering.
+
+\subsection{Overhead Analysis}
+\label{sec:overhead}
+
+\begin{table}[h]
+\centering
+\caption{Per-epoch wall-clock overhead relative to AdamW baseline.
+         \todo{Report on GPU as well.}}
+\label{tab:overhead}
+\begin{tabular}{lcc}
+\toprule
+Mode & Forward passes / probe & Overhead \\
+\midrule
+AdamW (baseline)         & 0    & — \\
+\topoadamw\ (heuristic)  & 25   & $\approx 14\%$ \\
+\topoadamwtda\ (TopoCNN) & 49   & $\approx 22\%$ \\
+\midrule
+Naive $15\times15$ grid  & 225  & $\approx 9\times$ heuristic \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The sparse probe (25 points) achieves a $9\times$ reduction in probe cost
+versus the naive $15\times15$ grid while preserving sufficient geometric
+information for the heuristic.
+
+\subsection{Ablation Studies}
+\label{sec:ablation}
+
+\todo{The following ablations should be run and reported.}
+
+\paragraph{Probe density.}  Compare $n_s \in \{0, 4, 8, 16, 32\}$ random
+samples to assess sensitivity of the variance estimate.
+
+\paragraph{Probe interval.}  Compare $T \in \{10, 25, 50, 100, 200\}$ to
+study the trade-off between overhead and adaptation frequency.
+
+\paragraph{Heuristic thresholds.}  Vary the sharpness and variance thresholds
+in Eq.~\eqref{eq:heuristic} to evaluate robustness.
+
+\paragraph{TDA bootstrapping speed.}  Compare \texttt{min\_samples}
+$\in \{50, 100, 200\}$ for the TopoCNN warmup to assess how quickly the CNN
+takes over from the heuristic.
+
+
+% ==============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why does a 2D subspace probe capture useful geometry?}
+The filter-normalised directions ensure that each direction has meaningful scale
+relative to the current parameters.  While a 2D slice is a coarse approximation
+of the full-dimensional landscape, \citet{li2018visualizing} showed that such
+slices preserve qualitative geometric structure.  Our sharpness metric
+(Eq.~\ref{eq:sharpness}) is closely related to the trace of the Hessian
+restricted to the probed subspace, which has been linked to generalisation
+performance~\citep{keskar2016large,foret2021sharpness}.
+
+\paragraph{Limitations.}
+\begin{itemize}
+  \item \textbf{Scale of experiments.}  Current results are on CIFAR with a
+        small convolutional network.  Behaviour on larger architectures
+        (ResNet, ViT) and datasets (ImageNet) remains to be validated.
+  \item \textbf{Uniform LR factor.}  All parameter groups receive the same
+        scaling factor.  Layer-wise LR adaptation (e.g., different factors for
+        early vs.\ late layers) could be more effective.
+  \item \textbf{TopoCNN warmup.}  With default settings, \textsc{TopoCNN}
+        activates after $\approx$13 epochs on CIFAR-10.  For short training
+        runs ($<$20 epochs) the optimizer remains in heuristic mode.
+  \item \textbf{Overhead on GPU.}  The probe's forward passes benefit from
+        GPU parallelism but are not batched; batching perturbations could
+        further reduce overhead.
+\end{itemize}
+
+\paragraph{Future work.}
+Layer-wise probing; combining with SAM-style gradient sharpness; applying to
+transformer language model fine-tuning; theoretical convergence analysis.
+
+
+% ==============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented \topoadamw, a topology-guided learning rate controller that probes
+a sparse neighbourhood of the current parameter vector at regular training
+intervals and adjusts the learning rate based on the detected geometric regime.
+The heuristic mode requires no additional dependencies and adds only 25 forward
+passes per probe.  The optional \textsc{TopoCNN} extension learns to classify
+persistence images of the loss surface online, bootstrapped from the heuristic
+labels.  Both modes improve over AdamW on CIFAR-10 and CIFAR-100 with moderate
+overhead.  The package is publicly available at
+\url{https://github.com/SVAH-X/topoadamw}.
+
+
+% ==============================================================================
+\bibliographystyle{abbrvnat}
+\bibliography{references}
+
+\end{document}
