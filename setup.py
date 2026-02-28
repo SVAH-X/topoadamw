@@ -7,11 +7,10 @@ from pathlib import Path
 
 # Read README for long description
 readme_path = Path(__file__).parent / "README.md"
-if readme_path.exists():
-    with open(readme_path, "r", encoding="utf-8") as f:
-        long_description = f.read()
-else:
-    long_description = "TopoAdam: Topology-Guided Adaptive Optimizer for PyTorch"
+long_description = (
+    readme_path.read_text(encoding="utf-8") if readme_path.exists()
+    else "TopoAdam: Topology-Guided Adaptive Optimizer for PyTorch"
+)
 
 setup_args = dict(
     name="topoadamw",
@@ -19,7 +18,7 @@ setup_args = dict(
     author="Kelvin Peng",
     author_email="kelvinpeng2004@outlook.com",
     description="Topology-guided adaptive optimizer for PyTorch",
-    long_description=open("README.md").read() if Path("README.md").exists() else "",
+    long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/SVAH-X/topoadamw",
     packages=["topoadamw"],

@@ -233,6 +233,113 @@ class TestGeometricFeatures(unittest.TestCase):
         self.assertIsInstance(features['variance'], (float, np.floating))
 
 
+class TestGridProbe(unittest.TestCase):
+
+    def setUp(self):
+        self.device = torch.device("cpu")
+        self.model = SimpleModel().to(self.device)
+        self.criterion = nn.CrossEntropyLoss()
+        self.data = torch.randn(32, 10)
+        self.target = torch.randint(0, 2, (32,))
+        from topoadamw import SubspaceProbe
+        self.probe = SubspaceProbe(self.model, grid_size=15, span=0.12, device=self.device)
+
+    def test_grid_probe_shape(self):
+        import numpy as np
+        grid = self.probe.grid_probe(self.data, self.target, self.criterion, grid_size=5)
+        self.assertIsInstance(grid, np.ndarray)
+        self.assertEqual(grid.shape, (5, 5))
+
+    def test_grid_probe_positive_losses(self):
+        grid = self.probe.grid_probe(self.data, self.target, self.criterion, grid_size=3)
+        self.assertTrue((grid > 0).all())
+
+    def test_model_params_restored_after_grid_probe(self):
+        """Parameters must be identical before and after probing."""
+        from torch.nn.utils import parameters_to_vector
+        before = parameters_to_vector(self.model.parameters()).clone()
+        self.probe.grid_probe(self.data, self.target, self.criterion, grid_size=3)
+        after = parameters_to_vector(self.model.parameters())
+        self.assertTrue(torch.allclose(before, after))
+
+
+class TestTopoCNNTrainer(unittest.TestCase):
+
+    def setUp(self):
+        from topoadamw import TopoCNNTrainer
+        self.TrainerClass = TopoCNNTrainer
+        self.dummy_img = torch.zeros(2, 50, 50)
+
+    def test_heuristic_label_flat(self):
+        from topoadamw import FLAT
+        self.assertEqual(self.TrainerClass.heuristic_label(0.05, 0.1), FLAT)
+
+    def test_heuristic_label_decel_sharp(self):
+        from topoadamw import DECEL
+        self.assertEqual(self.TrainerClass.heuristic_label(0.6, 0.1), DECEL)
+
+    def test_heuristic_label_decel_noisy(self):
+        from topoadamw import DECEL
+        self.assertEqual(self.TrainerClass.heuristic_label(0.05, 0.6), DECEL)
+
+    def test_heuristic_label_neutral(self):
+        from topoadamw import NEUTRAL
+        self.assertEqual(self.TrainerClass.heuristic_label(0.15, 0.3), NEUTRAL)
+
+    def test_predict_factor_returns_none_before_training(self):
+        trainer = self.TrainerClass(min_samples=10)
+        self.assertIsNone(trainer.predict_factor(self.dummy_img))
+
+    def test_add_sample_fills_buffer(self):
+        trainer = self.TrainerClass(min_samples=100, buffer_capacity=10)
+        for _ in range(7):
+            trainer.add_sample(self.dummy_img, sharpness=0.05, variance=0.1)
+        self.assertEqual(len(trainer._imgs), 7)
+
+    def test_buffer_respects_capacity(self):
+        trainer = self.TrainerClass(min_samples=100, buffer_capacity=3)
+        for _ in range(6):
+            trainer.add_sample(self.dummy_img, sharpness=0.05, variance=0.1)
+        self.assertLessEqual(len(trainer._imgs), 3)
+
+    def test_predict_factor_valid_after_training(self):
+        from topoadamw import LR_FACTORS
+        trainer = self.TrainerClass(min_samples=5, retrain_every=5, train_epochs=2)
+        for _ in range(5):
+            trainer.add_sample(self.dummy_img, sharpness=0.05, variance=0.1)
+        self.assertTrue(trainer.is_ready)
+        factor = trainer.predict_factor(self.dummy_img)
+        self.assertIn(factor, set(LR_FACTORS.values()))
+
+
+class TestDivergenceBrake(unittest.TestCase):
+
+    def setUp(self):
+        self.device = torch.device("cpu")
+        self.model = SimpleModel().to(self.device)
+        self.criterion = nn.CrossEntropyLoss()
+        self.data = torch.randn(32, 10)
+        self.target = torch.randint(0, 2, (32,))
+
+    def test_divergence_brake_reduces_lr(self):
+        """When current loss > 2× EMA, LR must drop regardless of landscape."""
+        base_opt = optim.AdamW(self.model.parameters(), lr=1e-3)
+        optimizer = TopoAdam(base_opt, self.model, interval=1, warmup_steps=0)
+
+        # Force a very low EMA so any real CrossEntropyLoss triggers the brake
+        optimizer.loss_ema = 1e-6
+        initial_lr = optimizer.optimizer.param_groups[0]['lr']
+
+        output = self.model(self.data)
+        loss = self.criterion(output, self.target)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step(data=self.data, target=self.target, criterion=self.criterion)
+
+        final_lr = optimizer.optimizer.param_groups[0]['lr']
+        self.assertLess(final_lr, initial_lr)
+
+
 def run_tests():
     """Run all tests"""
     unittest.main(argv=[''], verbosity=2, exit=False)

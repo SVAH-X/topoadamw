@@ -26,7 +26,7 @@ License: MIT
 
 import torch
 import numpy as np
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 from .probe import SubspaceProbe
 
 __version__ = "0.1.0"
@@ -56,8 +56,10 @@ class TopoAdam:
             - retrain_every: retrain interval in new samples (default: 25)
             - train_epochs: epochs per training session (default: 20)
             - buffer_capacity: ring-buffer size (default: 500)
-        max_lr_ratio: Maximum LR as ratio of initial LR (default: 1.0)
-        min_lr_ratio: Minimum LR as ratio of initial LR (default: 0.2)
+        max_lr_ratio: Maximum LR as ratio of initial LR. Float applies uniformly;
+            pass a list to set a per-group cap (default: 1.0)
+        min_lr_ratio: Minimum LR as ratio of initial LR. Float applies uniformly;
+            pass a list to set a per-group floor (default: 0.2)
         warmup_steps: Don't adjust LR for first N steps (default: 150)
         
     Geometric Heuristics:
@@ -72,22 +74,30 @@ class TopoAdam:
         model: torch.nn.Module,
         interval: int = 50,
         probe_kwargs: Optional[dict] = None,
-        max_lr_ratio: float = 1.0,
-        min_lr_ratio: float = 0.2,
+        max_lr_ratio: Union[float, list] = 1.0,
+        min_lr_ratio: Union[float, list] = 0.2,
         warmup_steps: int = 150,
         use_topo_cnn: bool = False,
         topo_cnn_kwargs: Optional[dict] = None,
         verbose: bool = False
     ):
-        self.optimizer      = base_optimizer
-        self.model          = model
-        self.interval       = interval
-        self.max_lr_ratio   = max_lr_ratio
-        self.min_lr_ratio   = min_lr_ratio
-        self.warmup_steps   = warmup_steps
-        self.use_topo_cnn   = use_topo_cnn
-        self.verbose        = verbose
-        self.steps          = 0
+        self.optimizer    = base_optimizer
+        self.model        = model
+        self.interval     = interval
+        self.warmup_steps = warmup_steps
+        self.use_topo_cnn = use_topo_cnn
+        self.verbose      = verbose
+        self.steps        = 0
+
+        # Per-group LR bounds (normalise scalar → list after param groups are known)
+        n = len(base_optimizer.param_groups)
+        self.max_lr_ratios = [max_lr_ratio] * n if isinstance(max_lr_ratio, (int, float)) else list(max_lr_ratio)
+        self.min_lr_ratios = [min_lr_ratio] * n if isinstance(min_lr_ratio, (int, float)) else list(min_lr_ratio)
+        if len(self.max_lr_ratios) != n or len(self.min_lr_ratios) != n:
+            raise ValueError(
+                f"max_lr_ratio and min_lr_ratio must be a scalar or a list with one "
+                f"entry per param group (expected {n})"
+            )
         
         # Device detection
         try:
@@ -230,13 +240,13 @@ class TopoAdam:
             factor = 0.8
             reason = "DIVERGENCE_BRAKE"
 
-        # Apply with bounds
+        # Apply with per-group bounds
         if abs(factor - 1.0) > 0.05:
             for i, pg in enumerate(self.optimizer.param_groups):
                 old_lr = pg['lr']
                 new_lr = max(
-                    min(old_lr * factor, self.base_lrs[i] * self.max_lr_ratio),
-                    self.base_lrs[i] * self.min_lr_ratio,
+                    min(old_lr * factor, self.base_lrs[i] * self.max_lr_ratios[i]),
+                    self.base_lrs[i] * self.min_lr_ratios[i],
                 )
                 pg['lr'] = new_lr
 
