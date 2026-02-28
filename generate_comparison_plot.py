@@ -217,8 +217,8 @@ def run_experiment(
 
     base_lr = optimizer.param_groups[0]["lr"]
     if isinstance(optimizer, TopoAdamW):
-        min_lr = base_lr * optimizer.min_lr_ratio
-        max_lr = base_lr * optimizer.max_lr_ratio
+        min_lr = base_lr * optimizer.min_lr_ratios[0]
+        max_lr = base_lr * optimizer.max_lr_ratios[0]
     else:
         min_lr = base_lr
         max_lr = base_lr
