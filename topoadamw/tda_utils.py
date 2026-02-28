@@ -1,5 +1,4 @@
 import numpy as np
-import gudhi as gd
 import torch
 
 class LossLandscapeTDA:
@@ -23,13 +22,20 @@ class LossLandscapeTDA:
         """
         High-Sensitivity Ratio-Based TDA.
         """
+        try:
+            import gudhi as gd
+        except ImportError as exc:
+            raise ImportError(
+                "gudhi is required for TDA computation. Install it with: pip install gudhi"
+            ) from exc
+
         # 1. 基础数据
         mid = loss_grid.shape[0] // 2
         center_loss = loss_grid[mid, mid]
         if center_loss <= 1e-8: center_loss = 1e-8
-        
+
         # 2. TDA 计算
-        cc = gd.CubicalComplex(dimensions=loss_grid.shape, 
+        cc = gd.CubicalComplex(dimensions=loss_grid.shape,
                                top_dimensional_cells=loss_grid.flatten())
         persistence = cc.persistence(homology_coeff_field=2, min_persistence=0)
         

@@ -345,11 +345,24 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--subset", type=int, default=0, help="Limit data for quick runs")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use-topo-cnn", action="store_true",
+                        help="Add a TopoAdamW-TDA experiment using TDA+TopoCNN pipeline")
+    parser.add_argument("--tda-grid-size", type=int, default=7,
+                        help="Grid size for TDA dense probe (default: 7)")
+    parser.add_argument("--tda-min-samples", type=int, default=100,
+                        help="Min samples before TopoCNN trains (default: 100)")
+    parser.add_argument("--tda-retrain-every", type=int, default=25,
+                        help="Retrain TopoCNN every N samples (default: 25)")
     args = parser.parse_args()
 
     os.makedirs(args.data_dir, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     requested = [name.strip().lower() for name in args.datasets.split(",") if name.strip()]
     unknown = [name for name in requested if name not in DATASET_SPECS]
     if unknown:
@@ -401,10 +414,34 @@ def main() -> None:
                 probe_kwargs={"grid_size": cfg["probe_grid"], "span": cfg["probe_span"]},
             )
 
+        def make_topoadamw_tda(model: nn.Module):
+            return TopoAdamW(
+                model.parameters(),
+                model,
+                lr=cfg["lr"],
+                weight_decay=cfg["weight_decay"],
+                interval=cfg["interval"],
+                warmup_steps=cfg["warmup_steps"],
+                max_lr_ratio=cfg["max_lr_ratio"],
+                min_lr_ratio=cfg["min_lr_ratio"],
+                probe_kwargs={
+                    "grid_size": cfg["probe_grid"],
+                    "span": cfg["probe_span"],
+                    "tda_grid_size": args.tda_grid_size,
+                },
+                use_topo_cnn=True,
+                topo_cnn_kwargs={
+                    "min_samples": args.tda_min_samples,
+                    "retrain_every": args.tda_retrain_every,
+                },
+            )
+
         experiments = [
             ("AdamW", make_adamw),
             ("TopoAdamW", make_topoadamw),
         ]
+        if args.use_topo_cnn:
+            experiments.append(("TopoAdamW-TDA", make_topoadamw_tda))
 
         results: Dict[str, Dict[str, List[float]]] = {}
         for name, make_opt in experiments:

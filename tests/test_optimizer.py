@@ -42,7 +42,6 @@ class TestTopoAdam(unittest.TestCase):
         self.assertIsNotNone(optimizer)
         self.assertEqual(optimizer.steps, 0)
         self.assertIsNotNone(optimizer.probe)
-        self.assertIsNotNone(optimizer.tda)
     
     def test_basic_step(self):
         """Test basic optimization step"""
@@ -214,18 +213,21 @@ class TestGeometricFeatures(unittest.TestCase):
         self.optimizer = TopoAdam(base_opt, self.model, warmup_steps=0)
     
     def test_feature_extraction(self):
-        """Test that geometric features are computed"""
+        """Test that geometric features are computed from a sparse probe result"""
         import numpy as np
-        
-        # Create synthetic loss grid
-        loss_grid = np.random.rand(15, 15) + 1.0
-        
-        features = self.optimizer._extract_geometric_features(loss_grid)
-        
+
+        probe_result = {
+            'center':    1.5,
+            'neighbors': [1.6, 1.7, 1.8, 1.5, 1.6, 1.7, 1.8, 1.5],
+            'samples':   [1.4, 1.5, 1.6, 1.7] * 4,
+        }
+
+        features = self.optimizer._extract_geometric_features(probe_result)
+
         self.assertIn('center_loss', features)
         self.assertIn('sharpness', features)
         self.assertIn('variance', features)
-        
+
         self.assertIsInstance(features['center_loss'], (float, np.floating))
         self.assertIsInstance(features['sharpness'], (float, np.floating))
         self.assertIsInstance(features['variance'], (float, np.floating))

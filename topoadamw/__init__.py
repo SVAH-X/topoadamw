@@ -21,6 +21,7 @@ Example:
 from .optimizer import TopoAdam, TopoAdamW, create_topoadam, create_topoadamw
 from .probe import SubspaceProbe
 from .tda_utils import LossLandscapeTDA
+from .topo_trainer import TopoCNN, TopoCNNTrainer, FLAT, NEUTRAL, DECEL, LR_FACTORS
 
 __version__ = "0.1.0"
 __author__ = "Congkai Peng"
@@ -32,6 +33,12 @@ __all__ = [
     "create_topoadam",
     "create_topoadamw",
     "SubspaceProbe",
-    "LossLandscapeTDA"
+    "LossLandscapeTDA",
+    "TopoCNN",
+    "TopoCNNTrainer",
+    "FLAT",
+    "NEUTRAL",
+    "DECEL",
+    "LR_FACTORS",
 ]
 

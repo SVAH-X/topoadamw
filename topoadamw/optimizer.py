@@ -28,7 +28,6 @@ import torch
 import numpy as np
 from typing import Optional, Callable
 from .probe import SubspaceProbe
-from .tda_utils import LossLandscapeTDA
 
 __version__ = "0.1.0"
 
@@ -45,8 +44,18 @@ class TopoAdam:
         model: PyTorch model
         interval: Probe loss landscape every N steps (default: 50)
         probe_kwargs: Additional arguments for SubspaceProbe
-            - grid_size: Resolution of landscape grid (default: 15)
+            - grid_size: Controls neighbor step size (default: 15)
             - span: Size of probed region (default: 0.12)
+            - n_samples: Random points for variance estimation (default: 16)
+            - tda_grid_size: Dense grid size for TDA path (default: 7, i.e. 49 passes)
+        use_topo_cnn: Use TDA + TopoCNN pipeline instead of hand-coded heuristics
+            (default: False). Requires gudhi. TopoCNN is bootstrapped online from
+            the heuristic; falls back to heuristic until enough samples are seen.
+        topo_cnn_kwargs: Optional settings for TopoCNNTrainer
+            - min_samples: samples before first training (default: 100)
+            - retrain_every: retrain interval in new samples (default: 25)
+            - train_epochs: epochs per training session (default: 20)
+            - buffer_capacity: ring-buffer size (default: 500)
         max_lr_ratio: Maximum LR as ratio of initial LR (default: 1.0)
         min_lr_ratio: Minimum LR as ratio of initial LR (default: 0.2)
         warmup_steps: Don't adjust LR for first N steps (default: 150)
@@ -66,16 +75,19 @@ class TopoAdam:
         max_lr_ratio: float = 1.0,
         min_lr_ratio: float = 0.2,
         warmup_steps: int = 150,
+        use_topo_cnn: bool = False,
+        topo_cnn_kwargs: Optional[dict] = None,
         verbose: bool = False
     ):
-        self.optimizer = base_optimizer
-        self.model = model
-        self.interval = interval
-        self.max_lr_ratio = max_lr_ratio
-        self.min_lr_ratio = min_lr_ratio
-        self.warmup_steps = warmup_steps
-        self.verbose = verbose
-        self.steps = 0
+        self.optimizer      = base_optimizer
+        self.model          = model
+        self.interval       = interval
+        self.max_lr_ratio   = max_lr_ratio
+        self.min_lr_ratio   = min_lr_ratio
+        self.warmup_steps   = warmup_steps
+        self.use_topo_cnn   = use_topo_cnn
+        self.verbose        = verbose
+        self.steps          = 0
         
         # Device detection
         try:
@@ -83,22 +95,44 @@ class TopoAdam:
         except StopIteration:
             self.device = torch.device('cpu')
         
-        # Initialize TDA components
         probe_cfg = probe_kwargs or {}
         self.probe = SubspaceProbe(
             model,
             grid_size=probe_cfg.get('grid_size', 15),
             span=probe_cfg.get('span', 0.12),
+            n_samples=probe_cfg.get('n_samples', 16),
             device=self.device
         )
-        self.tda = LossLandscapeTDA(resolution=50, bandwidth_scale=2.0)
-        
+
+        # TDA + TopoCNN pipeline (optional)
+        if use_topo_cnn:
+            try:
+                import gudhi  # noqa: F401 — fail early, not on first probe
+            except ImportError as exc:
+                raise ImportError(
+                    "use_topo_cnn=True requires gudhi. "
+                    "Install it with: pip install gudhi"
+                ) from exc
+            from .tda_utils import LossLandscapeTDA
+            from .topo_trainer import TopoCNNTrainer
+
+            cnn_cfg = topo_cnn_kwargs or {}
+            self._tda_grid_size = probe_cfg.get('tda_grid_size', 7)
+            self._tda           = LossLandscapeTDA(resolution=50, bandwidth_scale=2.0)
+            self._topo_trainer  = TopoCNNTrainer(
+                min_samples    = cnn_cfg.get('min_samples',    100),
+                retrain_every  = cnn_cfg.get('retrain_every',   25),
+                train_epochs   = cnn_cfg.get('train_epochs',    20),
+                buffer_capacity= cnn_cfg.get('buffer_capacity', 500),
+                device         = self.device,
+                verbose        = verbose,
+            )
+
         # Store base learning rates
         self.base_lrs = [pg['lr'] for pg in self.optimizer.param_groups]
         
         # Tracking for stability
         self.loss_ema = None
-        self.sharpness_ema = None
         self.ema_alpha = 0.2
         
         # Cache for next batch (avoid same-batch probing)
@@ -153,74 +187,96 @@ class TopoAdam:
         return loss
 
     def _adjust_learning_rate(self, data, target, criterion):
-        """Internal method to adjust LR based on landscape geometry"""
+        """Adjust LR based on landscape geometry (heuristic or TDA+TopoCNN)."""
         data, target = data.to(self.device), target.to(self.device)
-        
-        # 1. Probe loss landscape
-        loss_grid = self.probe.probe(data, target, criterion)
-        features = self._extract_geometric_features(loss_grid)
-        
-        # 2. Update exponential moving averages
+
+        if self.use_topo_cnn:
+            # ── TDA + TopoCNN path ────────────────────────────────────────────
+            # Dense grid probe: used for both TDA and heuristic feature extraction
+            loss_grid = self.probe.grid_probe(
+                data, target, criterion, self._tda_grid_size
+            )
+            features = self._extract_features_from_grid(loss_grid)
+
+            # Compute persistence image and update TopoCNN training buffer
+            persistence_img = self._tda.compute_persistence_image(loss_grid)
+            self._topo_trainer.add_sample(
+                persistence_img, features['sharpness'], features['variance']
+            )
+
+            # Use TopoCNN if trained; fall back to heuristic otherwise
+            factor = self._topo_trainer.predict_factor(persistence_img)
+            if factor is None:
+                factor = self._geometric_heuristic(features)
+                reason = self._get_adjustment_reason(features) + " (warmup)"
+            else:
+                reason = "TOPO_CNN"
+        else:
+            # ── Sparse heuristic path (default) ──────────────────────────────
+            probe_result = self.probe.probe(data, target, criterion)
+            features     = self._extract_geometric_features(probe_result)
+            factor       = self._geometric_heuristic(features)
+            reason       = self._get_adjustment_reason(features)
+
+        # Update loss EMA (used for divergence detection)
         if self.loss_ema is None:
             self.loss_ema = features['center_loss']
-            self.sharpness_ema = features['sharpness']
         else:
-            self.loss_ema = (self.ema_alpha * features['center_loss'] + 
-                           (1 - self.ema_alpha) * self.loss_ema)
-            self.sharpness_ema = (self.ema_alpha * features['sharpness'] + 
-                                (1 - self.ema_alpha) * self.sharpness_ema)
-        
-        # 3. Compute adjustment factor using geometric heuristics
-        factor = self._geometric_heuristic(features)
-        
-        # 4. Safety check: prevent divergence
+            self.loss_ema = (self.ema_alpha * features['center_loss'] +
+                             (1 - self.ema_alpha) * self.loss_ema)
+
+        # Safety override: divergence brake
         if features['center_loss'] > self.loss_ema * 2.0:
             factor = 0.8
             reason = "DIVERGENCE_BRAKE"
-        else:
-            reason = self._get_adjustment_reason(features)
-        
-        # 5. Apply adjustment with bounds
+
+        # Apply with bounds
         if abs(factor - 1.0) > 0.05:
             for i, pg in enumerate(self.optimizer.param_groups):
                 old_lr = pg['lr']
-                new_lr = old_lr * factor
-                
-                # Enforce bounds
-                max_lr = self.base_lrs[i] * self.max_lr_ratio
-                min_lr = self.base_lrs[i] * self.min_lr_ratio
-                new_lr = max(min(new_lr, max_lr), min_lr)
-                
+                new_lr = max(
+                    min(old_lr * factor, self.base_lrs[i] * self.max_lr_ratio),
+                    self.base_lrs[i] * self.min_lr_ratio,
+                )
                 pg['lr'] = new_lr
-                
+
                 if self.verbose:
                     print(f"[TopoAdam] Step {self.steps} | {reason} | "
                           f"Sharpness: {features['sharpness']:.3f} | "
                           f"LR: {old_lr:.6f} -> {new_lr:.6f}")
 
-    def _extract_geometric_features(self, loss_grid):
-        """Extract interpretable features from loss landscape"""
-        mid = loss_grid.shape[0] // 2
-        center_loss = loss_grid[mid, mid]
-        
-        # Sharpness: how much loss increases around center
-        neighbors = [
-            loss_grid[mid-1, mid], loss_grid[mid+1, mid],
-            loss_grid[mid, mid-1], loss_grid[mid, mid+1],
-            loss_grid[mid-1, mid-1], loss_grid[mid+1, mid+1],
-            loss_grid[mid-1, mid+1], loss_grid[mid+1, mid-1]
-        ]
+    def _extract_geometric_features(self, probe_result):
+        """Extract interpretable features from a sparse probe result dict."""
+        center_loss = probe_result['center']
+        neighbors   = probe_result['neighbors']
+        all_losses  = [center_loss] + neighbors + probe_result['samples']
+
+        # Sharpness: how much the 8 neighbors exceed the center
         avg_neighbor = np.mean(neighbors)
         sharpness = (avg_neighbor - center_loss) / (center_loss + 1e-8)
-        
-        # Variance: landscape roughness
-        variance = np.std(loss_grid) / (np.mean(loss_grid) + 1e-8)
-        
+
+        # Variance: landscape roughness estimated from all sampled points
+        variance = np.std(all_losses) / (np.mean(all_losses) + 1e-8)
+
         return {
             'center_loss': center_loss,
             'sharpness': sharpness,
-            'variance': variance
+            'variance': variance,
         }
+
+    def _extract_features_from_grid(self, loss_grid):
+        """Extract geometric features from a dense 2D loss grid (for TDA path)."""
+        mid          = loss_grid.shape[0] // 2
+        center_loss  = loss_grid[mid, mid]
+        neighbors    = [
+            loss_grid[mid-1, mid], loss_grid[mid+1, mid],
+            loss_grid[mid, mid-1], loss_grid[mid, mid+1],
+            loss_grid[mid-1, mid-1], loss_grid[mid+1, mid+1],
+            loss_grid[mid-1, mid+1], loss_grid[mid+1, mid-1],
+        ]
+        sharpness = (np.mean(neighbors) - center_loss) / (center_loss + 1e-8)
+        variance  = np.std(loss_grid) / (np.mean(loss_grid) + 1e-8)
+        return {'center_loss': center_loss, 'sharpness': sharpness, 'variance': variance}
 
     def _geometric_heuristic(self, features):
         """
@@ -320,6 +376,8 @@ class TopoAdamW(TopoAdam):
             "max_lr_ratio",
             "min_lr_ratio",
             "warmup_steps",
+            "use_topo_cnn",
+            "topo_cnn_kwargs",
             "verbose",
         }
         topo_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in topo_keys}
