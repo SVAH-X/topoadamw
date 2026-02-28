@@ -65,6 +65,8 @@ pip install -r requirements.txt
 For the TDA+TopoCNN mode, also install GUDHI:
 
 ```bash
+pip install topoadamw[tda]   # installs gudhi as well
+# or manually:
 pip install gudhi
 ```
 
@@ -270,7 +272,7 @@ python examples/custom_model_example.py
 
 ```bash
 pip install torch torchvision numpy
-pip install gudhi  # optional, TDA+TopoCNN mode only
+pip install topoadamw[tda]   # optional, TDA+TopoCNN mode only
 ```
 
 

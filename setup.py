@@ -27,11 +27,11 @@ setup_args = dict(
     install_requires=[
         "torch>=2.0.0",
         "numpy>=1.20.0",
-        "gudhi>=3.5.0",
     ],
     extras_require={
+        "tda": ["gudhi>=3.5.0"],
         "dev": ["pytest", "matplotlib", "seaborn"],
-        "benchmark": ["torchvision", "matplotlib", "seaborn"]
+        "benchmark": ["torchvision", "matplotlib", "seaborn"],
     },
     classifiers=[
         "Development Status :: 4 - Beta",
