@@ -3,6 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![Tests](https://github.com/SVAH-X/topoadamw/actions/workflows/test.yml/badge.svg)](https://github.com/SVAH-X/topoadamw/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/topoadamw.svg)](https://pypi.org/project/topoadamw/)
 
 TopoAdamW is a topology-guided **learning rate controller** built on top of AdamW. It probes the local loss landscape and dynamically scales the learning rate to improve training stability and final accuracy.
 
