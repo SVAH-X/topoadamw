@@ -121,13 +121,14 @@ def evaluate(model, loader, criterion, device):
 
 
 def run_one(opt_label, make_opt, dataset_name, train_loader, test_loader,
-            device, seed):
+            device, seed, make_sched=None):
     cfg = DATASET_CFG[dataset_name]
     set_seed(seed)
     model     = CifarNet(cfg["num_classes"]).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = make_opt(model)
     epochs    = cfg["epochs"]
+    scheduler = make_sched(optimizer, epochs) if make_sched else None
 
     val_accs, val_losses, train_losses = [], [], []
     t0 = time.time()
@@ -135,6 +136,8 @@ def run_one(opt_label, make_opt, dataset_name, train_loader, test_loader,
         tl       = train_epoch(model, optimizer, train_loader, criterion, device)
         vl, va   = evaluate(model, test_loader, criterion, device)
         elapsed  = time.time() - t0
+        if scheduler:
+            scheduler.step()
         train_losses.append(tl)
         val_losses.append(vl)
         val_accs.append(va)
@@ -190,7 +193,8 @@ def aggregate(histories):
 
 def save_plot(agg_by_opt, dataset_name, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    colors = {"AdamW": "#555", "TopoAdamW": "#2196F3", "TopoAdamW-TDA": "#FF9800"}
+    colors = {"AdamW": "#555", "AdamW+Cosine": "#4CAF50",
+              "TopoAdamW": "#2196F3", "TopoAdamW-TDA": "#FF9800"}
 
     for opt_label, res in agg_by_opt.items():
         col   = colors.get(opt_label, "gray")
@@ -275,6 +279,10 @@ def main():
             return optim.AdamW(model.parameters(),
                                lr=cfg["lr"], weight_decay=5e-4)
 
+        def make_cosine_sched(optimizer, epochs):
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=epochs, eta_min=cfg["lr"] * 0.01)
+
         def make_topoadamw(model):
             return TopoAdamW(
                 model.parameters(), model,
@@ -285,7 +293,12 @@ def main():
                 min_lr_ratio=cfg["min_lr"],
             )
 
-        optimizers = [("AdamW", make_adamw), ("TopoAdamW", make_topoadamw)]
+        # (label, make_opt, make_sched)
+        optimizers = [
+            ("AdamW",         make_adamw,      None),
+            ("AdamW+Cosine",  make_adamw,      make_cosine_sched),
+            ("TopoAdamW",     make_topoadamw,  None),
+        ]
 
         if args.include_tda:
             try:
@@ -300,11 +313,11 @@ def main():
                         min_lr_ratio=cfg["min_lr"],
                         use_topo_cnn=True,
                     )
-                optimizers.append(("TopoAdamW-TDA", make_tda))
+                optimizers.append(("TopoAdamW-TDA", make_tda, None))
             except ImportError:
                 print("gudhi not installed — skipping TDA mode")
 
-        for opt_label, make_opt in optimizers:
+        for opt_label, make_opt, make_sched in optimizers:
             for seed in seeds:
                 key = run_key(dataset_name, opt_label, seed)
                 if key in ckpt:
@@ -313,13 +326,14 @@ def main():
 
                 print(f"\n--- {key} ---")
                 history = run_one(opt_label, make_opt, dataset_name,
-                                  train_loader, test_loader, device, seed)
+                                  train_loader, test_loader, device, seed,
+                                  make_sched)
                 ckpt[key] = history
                 save_checkpoint(ckpt)
 
         # Aggregate and report after all runs for this dataset
         agg = {}
-        for opt_label, _ in optimizers:
+        for opt_label, _, _ in optimizers:
             histories = [ckpt[run_key(dataset_name, opt_label, s)] for s in seeds
                          if run_key(dataset_name, opt_label, s) in ckpt]
             if histories:

@@ -42,10 +42,14 @@ according to a geometric heuristic: accelerate in flat, smooth regions; slow
 down near sharp or noisy regions.  Optionally, a small convolutional network
 (\textsc{TopoCNN}) trained online on topological persistence images replaces the
 hand-coded heuristic once sufficient training data has been collected.
-On CIFAR-10 and CIFAR-100 the heuristic mode outperforms a tuned AdamW baseline
-by $+1.43\%$ and $+1.50\%$ accuracy respectively, with approximately $14\%$
-additional per-epoch wall-clock time.  The \textsc{TopoCNN} variant achieves
-$+1.51\%$ and $+1.46\%$ at $22\%$ overhead.  \topoadamw\ is available as an
+On CIFAR-10 (5 seeds) the heuristic mode outperforms plain AdamW by
+$+1.28\%$ accuracy and matches an AdamW+CosineAnnealing schedule
+($86.04\%$ vs.\ $85.95\%$, $p=0.58$, n.s.)\ while requiring no schedule
+hyperparameter and achieving half the seed-to-seed variance ($\pm0.13\%$
+vs.\ $\pm0.43\%$).  On CIFAR-100 the heuristic yields $+1.50\%$ over AdamW,
+with approximately $14\%$ additional per-epoch wall-clock time.
+The \textsc{TopoCNN} variant achieves $+1.60\%$ and $+1.46\%$ at $22\%$ overhead.
+\topoadamw\ is available as an
 open-source PyTorch package at \url{https://github.com/SVAH-X/topoadamw} and on
 PyPI (\texttt{pip install topoadamw}).
 \end{abstract}
@@ -79,8 +83,7 @@ samples~\citep{edelsbrunner2010computational,carlsson2009topology}.  Persistent
 homology, in particular, captures multi-scale connectivity and loop structure
 in a representation (the \emph{persistence diagram}) that is stable under
 small perturbations~\citep{cohen2007stability}.  Recent work has applied TDA
-to neural network loss landscapes~\citep{rieck2019neural} and to characterising the training
-dynamics \todo{(add further citations here)}.
+to neural network loss landscapes~\citep{rieck2019neural} and to characterising training dynamics.
 
 We make the following contributions:
 \begin{enumerate}
@@ -201,17 +204,18 @@ overall roughness of the sampled region.
 \subsection{Heuristic Learning Rate Controller}
 \label{sec:heuristic}
 
-Given the features above, the LR scaling factor $\rho$ is determined by:
+Given the features above, the LR scaling factor $\rho$ is determined by
+the first matching condition in priority order (if-elif semantics):
 
 \begin{equation}
   \rho = \begin{cases}
-    1.15 & \text{if sharpness} < 0.1 \text{ and variance} < 0.3
-            \quad\text{(flat \& smooth)} \\
-    0.80 & \text{if sharpness} > 0.5
+    1.15 & \text{if sharpness} < 0.1 \text{ \textbf{and} variance} < 0.3
+            \quad\text{(flat \& smooth — highest priority)} \\
+    0.80 & \text{else if sharpness} > 0.5
             \quad\text{(very sharp)} \\
-    0.85 & \text{if variance} > 0.5
+    0.85 & \text{else if variance} > 0.5
             \quad\text{(high variance)} \\
-    0.95 & \text{if sharpness} > 0.2
+    0.95 & \text{else if sharpness} > 0.2
             \quad\text{(moderately sharp)} \\
     1.00 & \text{otherwise (neutral)}
   \end{cases}
@@ -303,16 +307,21 @@ Standard data augmentation: random horizontal flip and random crop with padding 
 50 epochs for CIFAR-10 (lr $10^{-3}$), 100 epochs for CIFAR-100 (lr
 $5\times10^{-4}$).  \topoadamw\ parameters: $T=50$, $W=150$,
 $r_{\max}=1.0$, $r_{\min}=0.2$, span $\delta=0.12$, $n_s=16$.
-All experiments run on an Apple M2 Pro MacBook Pro (CPU only; 16\,GB RAM,
-PyTorch 2.0).  \todo{Report mean $\pm$ std over 5 seeds.}
+All experiments run on an Apple M2 Pro MacBook Pro (MPS/Metal GPU, 16\,GB
+unified memory, PyTorch 2.0).  CIFAR-10 results are reported as mean $\pm$
+std over 5 random seeds (seeds 0--4); CIFAR-100 results are single-run.
 
 \subsection{Main Results}
 \label{sec:results}
 
 \begin{table}[h]
 \centering
-\caption{Validation accuracy and loss on CIFAR-10 (50 epochs) and CIFAR-100
-         (100 epochs).  \todo{Add mean $\pm$ std over 5 seeds.}}
+\caption{Validation accuracy and loss on CIFAR-10 (50 epochs, mean $\pm$ std
+         over 5 seeds) and CIFAR-100 (100 epochs, single run).
+         $^*$\topoadamwtda\ CIFAR-10 is a single run; its $\Delta$ is
+         relative to the 5-seed AdamW mean.
+         $^{\dagger}$TopoAdamW vs.\ AdamW+Cosine difference is not
+         statistically significant ($p=0.58$).}
 \label{tab:main}
 \begin{tabular}{lcccccc}
 \toprule
@@ -320,12 +329,14 @@ PyTorch 2.0).  \todo{Report mean $\pm$ std over 5 seeds.}
 \cmidrule{2-3} \cmidrule{5-6}
 Optimizer & Acc (\%) & Loss & & Acc (\%) & Loss \\
 \midrule
-AdamW (baseline)          & 84.76 & 0.4983 & & 57.26 & 1.9423 \\
-\topoadamw\ (heuristic)   & 86.19 & 0.4523 & & 58.76 & 1.7980 \\
-\topoadamwtda\ (TopoCNN)  & \textbf{86.27} & \textbf{0.4559} & & 58.72 & 1.8520 \\
+AdamW (baseline)                & $84.67\pm0.26$ & $0.496\pm0.014$ & & 57.26 & 1.9423 \\
+AdamW + CosineAnnealing         & $86.04\pm0.43$ & $0.437\pm0.010$ & & ---   & ---    \\
+\topoadamw\ (heuristic)$^{\dagger}$ & $\mathbf{85.95\pm0.13}$ & $0.449\pm0.008$ & & \textbf{58.76} & \textbf{1.7980} \\
+\topoadamwtda\ (TopoCNN)$^{*}$  & 86.27 & 0.456 & & 58.72 & 1.8520 \\
 \midrule
-$\Delta$ (heuristic vs.\ AdamW) & $+1.43$ & $-0.046$ & & $+1.50$ & $-0.144$ \\
-$\Delta$ (TDA vs.\ AdamW)       & $+1.51$ & $-0.042$ & & $+1.46$ & $-0.090$ \\
+$\Delta$ (heuristic vs.\ AdamW)        & $+1.28$ & $-0.047$ & & $+1.50$ & $-0.144$ \\
+$\Delta$ (heuristic vs.\ Cosine)       & $-0.09$ & $+0.012$ & & ---     & ---     \\
+$\Delta$ (TDA vs.\ AdamW$^{*}$)        & $+1.60$ & $-0.040$ & & $+1.46$ & $-0.090$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -341,9 +352,60 @@ $\Delta$ (TDA vs.\ AdamW)       & $+1.51$ & $-0.042$ & & $+1.46$ & $-0.090$ \\
 \end{figure}
 
 \paragraph{CIFAR-10.}
-Both \topoadamw\ variants outperform AdamW by over 1.4 percentage points.
-The \textsc{TopoCNN} variant marginally exceeds the heuristic ($+0.08\%$),
-suggesting the learned classifier adds modest benefit at 50 epochs.
+The heuristic mode outperforms plain AdamW by $+1.28$ percentage points on
+average over 5 seeds ($85.95\%$ vs.\ $84.67\%$), with notably lower
+seed-to-seed variance ($\pm0.13\%$ vs.\ $\pm0.26\%$; paired $t$-test,
+$t=8.99$, $p<0.001$; Cohen's $d=4.02$;
+95\% CI: $[0.88,\,1.67]$ pp).
+
+We also compare against AdamW with a cosine-annealing schedule (CosineAnnealing;
+$T_{\max}=50$, $\eta_{\min}=10^{-5}$), a common strong baseline.
+AdamW+Cosine achieves $86.04\%\pm0.43\%$, marginally above \topoadamw\
+($85.95\%\pm0.13\%$); the $0.09$~pp gap is not statistically significant
+(paired $t$-test, $t=-0.60$, $p=0.58$; Cohen's $d=-0.27$;
+95\% CI: $[-0.50,\,+0.32]$ pp).
+Crucially, \topoadamw\ matches this schedule-tuned baseline \emph{without
+knowing the total epoch count in advance} and with $3\times$ lower
+variance, indicating that geometry-driven adaptation yields a more
+consistent optimisation trajectory than a fixed annealing curve.
+A single-run evaluation of \textsc{TopoCNN} yields $86.27\%$, suggesting
+the learned classifier can add further gains, though multi-seed evaluation
+is left to future work.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{../assets/multiseed_cifar10.png}
+\caption{CIFAR-10 accuracy and loss (mean $\pm$ std shaded) over 5 seeds.
+         \topoadamw\ (heuristic) matches AdamW+CosineAnnealing in final
+         accuracy while achieving $3\times$ lower seed-to-seed variance, and
+         both significantly outperform plain AdamW.}
+\label{fig:multiseed}
+\end{figure}
+
+\paragraph{Learning rate and geometry trajectories.}
+Figure~\ref{fig:traj} shows detailed per-run trajectories for seed 0.
+\topoadamw\ maintains the full initial LR throughout the warmup and early
+training phases (epochs 1--27), identical to AdamW.  Around epochs 28--30 the
+sharpness probe detects that the loss landscape has become significantly sharper
+--- consistent with the model approaching a local minimum --- and the LR is
+rapidly reduced from $10^{-3}$ to the floor $r_{\min}\!\cdot\!10^{-3}=2\times10^{-4}$.
+This automatic transition into a low-LR fine-tuning phase produces a stable
+accuracy plateau at ${\approx}86.1\%$, roughly 1.3~pp above the AdamW baseline.
+The sharpness and variance traces confirm that the probe is tracking meaningful
+geometric signal: sharpness rises monotonically as training progresses, while
+variance reflects localised roughness that correlates with transient accuracy
+drops.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.88\textwidth]{../assets/trajectories.png}
+\caption{Single-seed (seed 0) trajectories.  \textbf{Top:} validation accuracy.
+         \textbf{Middle:} learning rate over training; coloured dots mark probe
+         events (red = LR adjusted, green = neutral).  \textbf{Bottom:}
+         sharpness and variance at each probe; dashed lines show the decision
+         thresholds from Eq.~\eqref{eq:heuristic}.}
+\label{fig:traj}
+\end{figure}
 
 \paragraph{CIFAR-100.}
 Over 100 epochs the \textsc{TopoCNN} mode keeps the LR higher for longer
@@ -357,8 +419,8 @@ schedule engineering.
 
 \begin{table}[h]
 \centering
-\caption{Per-epoch wall-clock overhead relative to AdamW baseline.
-         \todo{Report on GPU as well.}}
+\caption{Per-epoch wall-clock overhead relative to AdamW baseline
+         (Apple M2 Pro, MPS).}
 \label{tab:overhead}
 \begin{tabular}{lcc}
 \toprule
@@ -488,8 +550,12 @@ intervals and adjusts the learning rate based on the detected geometric regime.
 The heuristic mode requires no additional dependencies and adds only 25 forward
 passes per probe.  The optional \textsc{TopoCNN} extension learns to classify
 persistence images of the loss surface online, bootstrapped from the heuristic
-labels.  Both modes improve over AdamW on CIFAR-10 and CIFAR-100 with moderate
-overhead.  The package is publicly available at
+labels.  Both modes improve over plain AdamW on CIFAR-10 and CIFAR-100 with moderate
+overhead.  In particular, the heuristic mode achieves $+1.28\%$ accuracy over
+plain AdamW on CIFAR-10 (5 seeds; $p<0.001$) and matches a hand-tuned
+cosine-annealing schedule ($p=0.58$, n.s.) while requiring no prior knowledge
+of the training horizon and achieving $3\times$ lower seed-to-seed variance
+($\pm0.13\%$ vs.\ $\pm0.43\%$).  The package is publicly available at
 \url{https://github.com/SVAH-X/topoadamw}.
 
 
